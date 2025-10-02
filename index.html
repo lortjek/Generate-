@@ -56,8 +56,19 @@
             </h1>
             <p class="text-gray-300 mt-2">Unggah gambar, deskripsikan produk Anda, dan biarkan AI berkreasi.</p>
         </header>
-
+        
         <main>
+            <!-- API Key Section -->
+            <div class="w-full max-w-2xl mx-auto mb-8 glassmorphism rounded-2xl p-6">
+                <label for="api-key-input" class="block mb-2 text-lg font-semibold text-gray-300 flex items-center justify-center">
+                    <i class="fas fa-key mr-2 text-yellow-400"></i> Kunci API Google AI
+                </label>
+                <input type="password" id="api-key-input" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-4 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Masukkan Kunci API Anda di sini">
+                <p class="text-xs text-gray-400 mt-2 text-center">
+                    Aplikasi ini memerlukan Kunci API Google AI. Kunci Anda disimpan dengan aman di browser Anda. Dapatkan kunci gratis dari <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-blue-400 hover:underline">Google AI Studio</a>.
+                </p>
+            </div>
+
             <!-- Image Upload Section -->
             <div id="upload-section" class="w-full max-w-2xl mx-auto glassmorphism rounded-2xl p-6 md:p-8 text-center border-dashed border-2 border-gray-500 hover:border-blue-400 transition-all duration-300 cursor-pointer">
                 <input type="file" id="image-uploader" class="hidden" accept="image/*">
@@ -161,17 +172,41 @@
         const resultsGrid = document.getElementById('results-grid');
         const errorMessage = document.getElementById('error-message');
         const errorText = document.getElementById('error-text');
-        // NEW: Get the description input
         const productDescription = document.getElementById('product-description');
+        const apiKeyInput = document.getElementById('api-key-input');
 
         let uploadedImageBase64 = null;
+        let userApiKey = '';
         
         // --- API Configuration ---
-        const apiKey = ""; 
-        const genAIApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-        const imageGenApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+        const GEN_AI_API_BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent`;
+        const IMAGE_GEN_API_BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict`;
+
+        // --- Functions ---
+        function checkGenerateButtonState() {
+            generateBtn.disabled = !(uploadedImageBase64 && userApiKey);
+        }
 
         // --- Event Listeners ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedKey = localStorage.getItem('userApiKey-ai-promo');
+            if (savedKey) {
+                userApiKey = savedKey;
+                apiKeyInput.value = savedKey;
+            }
+            checkGenerateButtonState();
+        });
+
+        apiKeyInput.addEventListener('input', () => {
+            userApiKey = apiKeyInput.value.trim();
+            if (userApiKey) {
+                localStorage.setItem('userApiKey-ai-promo', userApiKey);
+            } else {
+                localStorage.removeItem('userApiKey-ai-promo');
+            }
+            checkGenerateButtonState();
+        });
+
         uploadSection.addEventListener('click', () => imageUploader.click());
         uploadSection.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); uploadSection.classList.add('border-blue-400'); });
         uploadSection.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); uploadSection.classList.remove('border-blue-400'); });
@@ -198,7 +233,7 @@
                 imagePreview.src = reader.result;
                 uploadPrompt.classList.add('hidden');
                 imagePreviewContainer.classList.remove('hidden');
-                generateBtn.disabled = false;
+                checkGenerateButtonState();
             };
             reader.readAsDataURL(file);
         }
@@ -209,14 +244,19 @@
             imagePreview.src = '#';
             uploadPrompt.classList.remove('hidden');
             imagePreviewContainer.classList.add('hidden');
-            generateBtn.disabled = true;
             resultsSection.classList.add('hidden');
             resultsGrid.innerHTML = '';
-            productDescription.value = ''; // Clear description field too
+            productDescription.value = '';
             hideError();
+            checkGenerateButtonState();
         }
 
         async function handleGenerationProcess() {
+            if (!userApiKey) {
+                showError("Mohon masukkan Kunci API Google AI Anda untuk melanjutkan.");
+                apiKeyInput.focus();
+                return;
+            }
             if (!uploadedImageBase64) {
                 showError("Mohon unggah gambar terlebih dahulu.");
                 return;
@@ -228,11 +268,10 @@
             populateInitialCards();
             hideError();
 
-            // NEW: Get the description value from the textarea
             const userDescription = productDescription.value.trim();
 
             try {
-                // Step 1: Analyze image, now with user description
+                // Step 1: Analyze image and description
                 const analysisPayload = {
                     contents: [{
                         parts: [{ text: `
@@ -265,7 +304,7 @@
                      generationConfig: { responseMimeType: "application/json" }
                 };
                 
-                const analysisResponse = await makeApiCall(genAIApiUrl, analysisPayload);
+                const analysisResponse = await makeApiCall(GEN_AI_API_BASE_URL, analysisPayload);
                 if (!analysisResponse.promotions || analysisResponse.promotions.length === 0) {
                      throw new Error("AI tidak dapat menghasilkan prompt. Coba gambar lain atau tambahkan deskripsi.");
                 }
@@ -307,7 +346,7 @@
 
         async function generateImage(prompt) {
              const payload = { instances: [{ prompt: prompt }], parameters: { "sampleCount": 1 } };
-             const response = await makeApiCall(imageGenApiUrl, payload, true);
+             const response = await makeApiCall(IMAGE_GEN_API_BASE_URL, payload, true);
              if (response.predictions && response.predictions.length > 0 && response.predictions[0].bytesBase64Encoded) {
                  return `data:image/png;base64,${response.predictions[0].bytesBase64Encoded}`;
              } else {
@@ -315,11 +354,13 @@
              }
         }
 
-        async function makeApiCall(url, payload, isPredict = false) {
+        async function makeApiCall(baseUrl, payload, isPredict = false) {
+             if (!userApiKey) throw new Error("Kunci API tidak tersedia.");
+             const urlWithKey = `${baseUrl}?key=${userApiKey}`;
              let lastError = null;
              for (let i = 0; i < 3; i++) {
                  try {
-                     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                     const response = await fetch(urlWithKey, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                      if (!response.ok) {
                          const errorBody = await response.json();
                          throw new Error(`Gagal menghubungi AI: ${errorBody.error?.message || response.statusText}`);
@@ -334,10 +375,10 @@
                      } catch (e) { throw new Error("AI memberikan respons dalam format yang tidak terduga."); }
                  } catch (error) {
                      lastError = error;
-                     await new Promise(resolve => setTimeout(resolve, i * 1000));
+                     await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
                  }
              }
-             throw lastError; // Rethrow the last error if all retries fail
+             throw lastError;
         }
 
         function setLoadingState(isLoading, text = '') {
@@ -348,8 +389,8 @@
                 generateBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Mohon Tunggu...`;
             } else {
                 loadingSection.classList.add('hidden');
-                generateBtn.disabled = false;
-                 generateBtn.innerHTML = `<i class="fas fa-sparkles mr-2"></i> Buat Promosi`;
+                checkGenerateButtonState();
+                generateBtn.innerHTML = `<i class="fas fa-sparkles mr-2"></i> Buat Promosi`;
             }
         }
 
@@ -390,7 +431,6 @@
             loader.classList.add('hidden');
         }
         
-        // --- Delegated Event Listeners for Dynamic Content ---
         resultsGrid.addEventListener('click', async (e) => {
             const target = e.target.closest('button');
             if (!target) return;
@@ -415,15 +455,13 @@
                 }
             } else if (target.matches('.copy-video-prompt-btn')) {
                  const videoPromptDiv = card.querySelector('.video-prompt-output');
-                 // Create a temporary textarea to copy the text
                  const tempTextArea = document.createElement('textarea');
-                 tempTextArea.value = videoPromptDiv.innerText; // Use innerText to get formatted text
+                 tempTextArea.value = videoPromptDiv.innerText;
                  document.body.appendChild(tempTextArea);
                  tempTextArea.select();
                  document.execCommand('copy');
                  document.body.removeChild(tempTextArea);
 
-                 // Provide feedback
                  const originalText = target.innerHTML;
                  target.innerHTML = `<i class="fas fa-check mr-1"></i> Disalin!`;
                  setTimeout(() => {
@@ -434,4 +472,5 @@
     </script>
 </body>
 </html>
+
 
